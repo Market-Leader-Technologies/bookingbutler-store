@@ -1,0 +1,781 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Store · vanilla example</title>
+    <!--
+      @bookingbutler/store with no framework: the core only.
+
+      Run `pnpm build`, then serve the repo root (ES modules don't load from
+      file://), e.g. `npx serve .` or `python3 -m http.server`, and open
+      /examples/vanilla.html?store=<storeId>&api=<API origin>
+
+      On a real site, import from a CDN after publishing:
+        import { … } from "https://cdn.jsdelivr.net/npm/@bookingbutler/store@0.1.0/dist/index.js";
+
+      Every figure on this page comes from the server (POST /quote). The
+      page never multiplies a price or adds a subtotal up.
+    -->
+    <style>
+      :root {
+        --bg: #f7f7f5;
+        --surface: #fff;
+        --text: #1c1c1a;
+        --muted: #66645e;
+        --border: #dddbd3;
+        --accent: #1d4ed8;
+        --accent-ink: #fff;
+        --danger: #b42318;
+        color-scheme: light;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      [hidden] {
+        display: none !important;
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        font:
+          16px/1.5 system-ui,
+          sans-serif;
+      }
+      button,
+      input,
+      select,
+      textarea {
+        font: inherit;
+        color: inherit;
+      }
+      .wrap {
+        max-width: 1100px;
+        margin: 0 auto;
+        padding: 0 16px;
+      }
+      header {
+        background: var(--surface);
+        border-bottom: 1px solid var(--border);
+        position: sticky;
+        top: 0;
+        z-index: 2;
+      }
+      header .wrap {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        min-height: 60px;
+      }
+      header h1 {
+        flex: 1;
+        font-size: 18px;
+        margin: 0;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+      .btn {
+        min-height: 44px;
+        min-width: 44px;
+        padding: 0 16px;
+        border-radius: 8px;
+        border: 1px solid var(--border);
+        background: var(--surface);
+        cursor: pointer;
+      }
+      .btn.primary {
+        background: var(--accent);
+        color: var(--accent-ink);
+        border-color: var(--accent);
+        font-weight: 600;
+      }
+      .btn:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+      .grid {
+        list-style: none;
+        padding: 0;
+        margin: 16px 0;
+        display: grid;
+        gap: 16px;
+        grid-template-columns: repeat(auto-fill, minmax(min(100%, 200px), 1fr));
+      }
+      .card {
+        width: 100%;
+        text-align: left;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 0;
+        overflow: hidden;
+        cursor: pointer;
+      }
+      .card .ph {
+        aspect-ratio: 4/3;
+        background: #ecebe6 center/cover no-repeat;
+      }
+      .card div.b {
+        padding: 10px 12px 14px;
+        display: grid;
+        gap: 2px;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 14px;
+      }
+      .err {
+        color: var(--danger);
+      }
+      section.panel {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: 12px;
+        padding: 16px;
+        margin: 16px 0;
+        display: grid;
+        gap: 12px;
+        min-width: 0;
+      }
+      .opts {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+      }
+      .opt[aria-pressed="true"] {
+        border-color: var(--accent);
+        box-shadow: inset 0 0 0 1px var(--accent);
+        font-weight: 600;
+      }
+      label {
+        display: grid;
+        gap: 4px;
+        font-size: 14px;
+        font-weight: 600;
+        min-width: 0;
+      }
+      input,
+      select,
+      textarea {
+        min-height: 44px;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 8px 10px;
+        background: var(--surface);
+        width: 100%;
+        font-size: 16px;
+      }
+      .row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 8px;
+        align-items: end;
+      }
+      .row > label {
+        flex: 1 1 120px;
+      }
+      dl {
+        margin: 0;
+        display: grid;
+        gap: 4px;
+      }
+      dl div {
+        display: flex;
+        justify-content: space-between;
+        gap: 12px;
+      }
+      dt {
+        color: var(--muted);
+      }
+      dd {
+        margin: 0;
+        font-variant-numeric: tabular-nums;
+      }
+      .line {
+        display: grid;
+        gap: 6px;
+        padding: 10px 0;
+        border-bottom: 1px solid var(--border);
+      }
+      .method {
+        display: flex;
+        gap: 10px;
+        align-items: flex-start;
+        font-weight: 400;
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        padding: 10px;
+        min-height: 44px;
+      }
+      .method input {
+        width: 20px;
+        min-height: 20px;
+        margin: 2px 0 0;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="wrap">
+        <h1 id="storeName">Store</h1>
+        <button class="btn" id="cartBtn" type="button">
+          Cart (<span id="count">0</span>)
+        </button>
+      </div>
+    </header>
+    <main class="wrap">
+      <p class="muted" id="storeText"></p>
+      <p class="err" id="err" role="alert" hidden></p>
+      <ul class="grid" id="grid" aria-label="Listings"></ul>
+
+      <section class="panel" id="detail" hidden aria-labelledby="dName">
+        <button class="btn" type="button" id="dClose">← All listings</button>
+        <h2 id="dName" style="margin: 0"></h2>
+        <p id="dPrice" style="margin: 0; font-weight: 600"></p>
+        <div id="dOpts"></div>
+        <div id="dSize" class="row" hidden>
+          <label
+            >How many sq ft?
+            <input id="sizeAmount" inputmode="decimal" autocomplete="off"
+          /></label>
+          <label style="flex: 0 0 100px"
+            >Unit
+            <select id="sizeUnit"></select
+          ></label>
+        </div>
+        <p id="dQuote" class="muted" role="status" style="margin: 0"></p>
+        <div class="row">
+          <label style="flex: 0 0 96px"
+            >Quantity
+            <input
+              id="qty"
+              type="number"
+              min="1"
+              max="999"
+              value="1"
+              inputmode="numeric"
+          /></label>
+          <button class="btn primary" id="addBtn" type="button" style="flex: 1">
+            Add to cart
+          </button>
+        </div>
+        <p id="addMsg" role="status" style="margin: 0"></p>
+      </section>
+
+      <section class="panel" id="cart" hidden aria-labelledby="cartTitle">
+        <h2 id="cartTitle" style="margin: 0">Your cart</h2>
+        <div id="lines"></div>
+        <dl>
+          <div>
+            <dt>Subtotal</dt>
+            <dd id="subtotal">—</dd>
+          </div>
+          <div>
+            <dt>Total</dt>
+            <dd class="muted">Tax and delivery at checkout</dd>
+          </div>
+        </dl>
+        <p class="err" id="quoteErr" role="alert" hidden></p>
+
+        <form id="checkout" novalidate style="display: grid; gap: 12px">
+          <h3 style="margin: 8px 0 0">Delivery</h3>
+          <div class="row">
+            <label
+              >Street <input id="street1" autocomplete="address-line1"
+            /></label>
+            <label
+              >City <input id="city" autocomplete="address-level2"
+            /></label>
+          </div>
+          <div class="row">
+            <label
+              >State <input id="state" autocomplete="address-level1"
+            /></label>
+            <label
+              >Postal code <input id="postalCode" autocomplete="postal-code"
+            /></label>
+          </div>
+          <div
+            id="methods"
+            role="radiogroup"
+            aria-label="How the order gets to you"
+            style="display: grid; gap: 8px"
+          ></div>
+          <h3 style="margin: 8px 0 0">Your details</h3>
+          <label>Name <input id="name" autocomplete="name" required /></label>
+          <label
+            >Email <input id="email" type="email" autocomplete="email" required
+          /></label>
+          <section aria-label="Order total">
+            <dl id="totals"></dl>
+            <p class="muted" id="totalNote"></p>
+          </section>
+          <p class="err" id="coErr" role="alert" hidden></p>
+          <button class="btn primary" id="coBtn" type="submit">
+            Continue to payment
+          </button>
+        </form>
+      </section>
+    </main>
+
+    <script type="module">
+      import {
+        createStoreClient,
+        createCart,
+        createQuoter,
+        createShippingQuoter,
+        shippingOptionsKey,
+        TAXED_QUOTE_DEBOUNCE_MS,
+        cardPriceText,
+        priceText,
+        formatMoney,
+        isBySize,
+        unitsForBasis,
+        measureUnitLabel,
+        defaultUnitForBasis,
+        buyablePrice,
+        lineFromListing,
+        pickOption,
+        optionValues,
+        sizeFromDraft,
+        emptySizeDraft,
+        refusalMessage,
+        checkoutRequest,
+        classifyError,
+        isDelivered,
+        addressIncomplete,
+        EMAIL_SHAPE,
+        redirectToCheckout,
+        singleLineCart,
+        shippingChargeText,
+      } from "../dist/index.js";
+
+      const params = new URL(location.href).searchParams;
+      const STORE_ID = params.get("store");
+      // Unset means production (https://api.bookingbutler.ai).
+      const API = params.get("api") ?? undefined;
+      if (!STORE_ID) {
+        document.body.innerHTML =
+          '<p style="padding:16px;font-family:system-ui">Add <code>?store=&lt;storeId&gt;</code> to the URL (and <code>&amp;api=&lt;origin&gt;</code> for a non-production API).</p>';
+        throw new Error("examples/vanilla.html needs ?store=<storeId>");
+      }
+      const $ = (id) => document.getElementById(id);
+      const esc = (s) =>
+        String(s ?? "").replace(
+          /[&<>"']/g,
+          (c) =>
+            ({
+              "&": "&amp;",
+              "<": "&lt;",
+              ">": "&gt;",
+              '"': "&quot;",
+              "'": "&#39;",
+            })[c]
+        );
+      const show = (el, text) => {
+        el.hidden = !text;
+        el.textContent = text ?? "";
+      };
+
+      const client = createStoreClient({
+        storeId: STORE_ID,
+        ...(API ? { baseUrl: API } : {}),
+      });
+      const cart = createCart({ storeId: STORE_ID });
+      const goods = createQuoter({ client }); // the cart, while shopping
+      // The checkout step: each taxed quote costs the shop a calculation and
+      // has a tighter limit, so it waits longer and never asks twice.
+      const taxed = createQuoter({
+        client,
+        debounceMs: TAXED_QUOTE_DEBOUNCE_MS,
+        reuseAnswers: true,
+      });
+      const lineQuote = createQuoter({ client }); // a listing's price at a size
+      const shipping = createShippingQuoter({ client });
+      let methodId;
+
+      // ── Store and listings ──────────────────────────────────────────────
+      client
+        .getStore()
+        .then((s) => {
+          $("storeName").textContent = s.name ?? "Store";
+          $("storeText").textContent = s.closed
+            ? "This store has closed."
+            : (s.description ?? "");
+        })
+        .catch((e) => show($("err"), classifyError(e).message));
+
+      client
+        .listListings({ limit: 48 })
+        .then((page) => {
+          $("grid").innerHTML =
+            (page.listings ?? [])
+              .map(
+                (l) => `
+          <li><button class="card" type="button" data-id="${esc(l.id)}">
+            <div class="ph" style="${l.thumbnail?.url ? `background-image:url('${esc(l.thumbnail.url)}')` : ""}"></div>
+            <div class="b"><strong>${esc(l.name)}</strong><span class="muted">${esc(cardPriceText(l) ?? "")}</span></div>
+          </button></li>`
+              )
+              .join("") || `<li class="muted">Nothing here yet.</li>`;
+        })
+        .catch((e) => show($("err"), classifyError(e).message));
+
+      $("grid").addEventListener("click", (e) => {
+        const id = e.target.closest("[data-id]")?.dataset.id;
+        if (id) openListing(id);
+      });
+
+      // ── Listing detail ──────────────────────────────────────────────────
+      let current = null; // { listing, selection, option, price }
+      async function openListing(id) {
+        show($("addMsg"), "");
+        const listing = await client
+          .getListing(id)
+          .catch((e) => (show($("err"), classifyError(e).message), null));
+        if (!listing) return;
+        const first = listing.options?.[0];
+        current = {
+          listing,
+          selection: { ...(first?.options ?? {}) },
+          size: emptySizeDraft("ft"),
+        };
+        $("detail").hidden = false;
+        $("dName").textContent = listing.name ?? "";
+        renderDetail();
+        $("detail").scrollIntoView({ block: "start" });
+      }
+      function renderDetail() {
+        const { listing, selection } = current;
+        const option = pickOption(listing.options ?? [], selection);
+        const price = buyablePrice(option?.prices, cart.currency());
+        current.option = option;
+        current.price = price;
+        $("dPrice").textContent = price ? priceText(price) : "Unavailable";
+        const values = optionValues(
+          listing.optionNames ?? [],
+          listing.options ?? []
+        );
+        $("dOpts").innerHTML = (listing.optionNames ?? [])
+          .map(
+            (name) => `
+          <fieldset style="border:0;padding:0;margin:0 0 8px"><legend style="font-weight:600;font-size:14px">${esc(name)}</legend>
+          <div class="opts">${values[name].map((v) => `<button type="button" class="btn opt" data-name="${esc(name)}" data-value="${esc(v)}" aria-pressed="${option?.options?.[name] === v}">${esc(v)}</button>`).join("")}</div></fieldset>`
+          )
+          .join("");
+        const rate = price?.rate;
+        const bySize = isBySize(rate);
+        $("dSize").hidden = !bySize;
+        if (bySize) {
+          const units = unitsForBasis(rate.basis);
+          if (!units.includes(current.size.unit))
+            current.size = emptySizeDraft(
+              rate.unit ?? defaultUnitForBasis(rate.basis)
+            );
+          $("sizeUnit").innerHTML = units
+            .map(
+              (u) =>
+                `<option value="${u}" ${u === current.size.unit ? "selected" : ""}>${esc(measureUnitLabel(rate.basis, u) || u)}</option>`
+            )
+            .join("");
+          $("sizeAmount").value = current.size.amount; // a half-typed "4." stays as typed
+          $("sizeAmount").previousSibling.textContent =
+            rate.basis === "length"
+              ? "Length "
+              : `How many ${measureUnitLabel(rate.basis, current.size.unit)}? `;
+        }
+        quoteListing();
+      }
+      $("dOpts").addEventListener("click", (e) => {
+        const b = e.target.closest("[data-name]");
+        if (!b) return;
+        const next = {
+          ...current.selection,
+          [b.dataset.name]: b.dataset.value,
+        };
+        current.selection = {
+          ...(pickOption(current.listing.options ?? [], next, b.dataset.name)
+            ?.options ?? next),
+        };
+        renderDetail();
+      });
+      $("sizeAmount").addEventListener("input", (e) => {
+        current.size = { ...current.size, amount: e.target.value };
+        quoteListing();
+      });
+      $("sizeUnit").addEventListener("change", (e) => {
+        current.size = { ...current.size, unit: e.target.value };
+        renderDetail();
+      });
+      $("qty").addEventListener("input", quoteListing);
+      const qty = () => {
+        const n = Number($("qty").value);
+        return Number.isInteger(n) && n >= 1 && n <= 999 ? n : null;
+      };
+      const typedSize = () =>
+        current.price?.rate && isBySize(current.price.rate)
+          ? sizeFromDraft(current.size, current.price.rate.basis)
+          : undefined;
+
+      // A price with a rate is the server's to work out: a one-line quote.
+      function quoteListing() {
+        const { listing, price } = current;
+        const rate = price?.rate;
+        if (!rate || !qty()) {
+          lineQuote.update({ lines: [] });
+          $("dQuote").textContent = "";
+          return;
+        }
+        const size = typedSize();
+        if (isBySize(rate) && !size) {
+          lineQuote.update({ lines: [] });
+          $("dQuote").textContent = "Enter the size to see the price.";
+          return;
+        }
+        lineQuote.update(
+          singleLineCart({
+            listingId: listing.id,
+            priceId: price.id,
+            quantity: qty(),
+            rate,
+            ...(size ? { size } : {}),
+          })
+        );
+      }
+      lineQuote.subscribe(() => {
+        const v = lineQuote.view();
+        const l = v.quote ? v.lines[0] : undefined;
+        $("dQuote").textContent =
+          l?.amountCents != null
+            ? `${formatMoney(l.amountCents, v.quote.currency)}${l.quantity > 1 ? ` for ${l.quantity} · ${formatMoney(l.unitAmountCents, v.quote.currency)} each` : ""}`
+            : (v.sizeErrors?.[0] ??
+              v.error ??
+              (v.loading ? "Working out the price…" : $("dQuote").textContent));
+      });
+
+      $("addBtn").addEventListener("click", () => {
+        const { listing, option, price } = current;
+        if (!price)
+          return show($("addMsg"), "This can't be bought online here.");
+        if (!qty()) return show($("addMsg"), "Enter a quantity from 1 to 999.");
+        const size = typedSize();
+        if (isBySize(price.rate) && !size)
+          return show($("addMsg"), "Enter the size you need.");
+        const line = lineFromListing({
+          listing,
+          option,
+          price,
+          quantity: qty(),
+          ...(size ? { size } : {}),
+        });
+        const result = cart.add(line);
+        show(
+          $("addMsg"),
+          result.ok ? "Added to your cart." : refusalMessage(result.refusal)
+        );
+      });
+      $("dClose").addEventListener("click", () => {
+        $("detail").hidden = true;
+      });
+
+      // ── Cart and checkout ───────────────────────────────────────────────
+      $("cartBtn").addEventListener("click", () => {
+        $("cart").hidden = !$("cart").hidden;
+        if (!$("cart").hidden) $("cart").scrollIntoView({ block: "start" });
+      });
+      const address = () => ({
+        street1: $("street1").value,
+        city: $("city").value,
+        state: $("state").value,
+        postalCode: $("postalCode").value,
+      });
+
+      function refresh() {
+        const c = cart.getSnapshot();
+        $("count").textContent = String(cart.itemCount());
+        goods.update(c);
+        shipping.update(c, address());
+        updateTaxed();
+        renderCart();
+      }
+      function deliveryChoice() {
+        const s = shipping.getState().options;
+        if (!s) return { ready: false };
+        if (s.configured === false) return { ready: true, shipping: undefined };
+        const options = s.options ?? [];
+        const chosen =
+          options.find((o) => o.methodId === methodId) ??
+          (options.length === 1 ? options[0] : undefined);
+        if (!chosen) return { ready: false };
+        const delivered = isDelivered(chosen);
+        // A delivery waits until the options answer the address as typed now.
+        const st = shipping.getState();
+        const settled =
+          !st.loading &&
+          st.answeredFor === shippingOptionsKey(cart.getSnapshot(), address());
+        return {
+          ready: !(delivered && (addressIncomplete(address()) || !settled)),
+          chosen,
+          delivered,
+          shipping: {
+            methodId: chosen.methodId,
+            ...(delivered ? { address: address() } : {}),
+          },
+        };
+      }
+      // includeTax is sent only once delivery is chosen (and addressed).
+      function updateTaxed() {
+        const d = deliveryChoice();
+        taxed.update(cart.getSnapshot(), {
+          checkout: { shipping: d.shipping, includeTax: true },
+          enabled: d.ready,
+        });
+      }
+
+      function renderCart() {
+        const c = cart.getSnapshot();
+        const v = goods.view();
+        $("lines").innerHTML =
+          c.lines
+            .map((l, i) => {
+              const q = v.lines[i];
+              return `<div class="line"><strong>${esc(l.name)}</strong>${l.optionLabel ? `<span class="muted">${esc(l.optionLabel)}</span>` : ""}
+            <div class="row" style="align-items:center"><span>Qty</span>
+              <button class="btn" type="button" data-dec="${i}" aria-label="One fewer ${esc(l.name)}">−</button>${l.quantity}
+              <button class="btn" type="button" data-inc="${i}" aria-label="One more ${esc(l.name)}">+</button>
+              <button class="btn" type="button" data-rm="${i}">Remove</button>
+              <span style="margin-left:auto">${q?.amountCents != null ? esc(formatMoney(q.amountCents, l.currency)) : v.failed ? "—" : "…"}</span></div></div>`;
+            })
+            .join("") || `<p class="muted">Your cart is empty.</p>`;
+        $("subtotal").textContent =
+          v.subtotalCents != null
+            ? formatMoney(v.subtotalCents, v.quote.currency)
+            : v.failed
+              ? "—"
+              : c.lines.length
+                ? "…"
+                : "—";
+        show($("quoteErr"), v.error);
+      }
+      $("lines").addEventListener("click", (e) => {
+        const t = e.target.closest("button");
+        if (!t) return;
+        const c = cart.getSnapshot();
+        if (t.dataset.inc)
+          cart.setQuantity(
+            +t.dataset.inc,
+            c.lines[+t.dataset.inc].quantity + 1
+          );
+        if (t.dataset.dec)
+          cart.setQuantity(
+            +t.dataset.dec,
+            c.lines[+t.dataset.dec].quantity - 1
+          );
+        if (t.dataset.rm) cart.remove(+t.dataset.rm);
+      });
+
+      shipping.subscribe(() => {
+        const s = shipping.getState();
+        const options = s.options?.configured ? (s.options.options ?? []) : [];
+        $("methods").innerHTML = s.error
+          ? `<p class="err">${esc(s.error)}</p>`
+          : s.options?.configured === false
+            ? `<p class="muted">Pickup at the shop.</p>`
+            : options
+                .map(
+                  (
+                    o
+                  ) => `<label class="method"><input type="radio" name="method" value="${esc(o.methodId)}" ${o.methodId === methodId ? "checked" : ""} />
+              <span><strong>${esc(o.name)}</strong><br><span class="muted">${esc(shippingChargeText(o, s.options.currency))}</span></span></label>`
+                )
+                .join("") ||
+              `<p class="muted">${s.loading ? "Getting delivery options…" : "Enter a postal code to see delivery options."}</p>`;
+        updateTaxed();
+      });
+      $("methods").addEventListener("change", (e) => {
+        methodId = e.target.value;
+        updateTaxed();
+      });
+      for (const id of ["street1", "city", "state", "postalCode"])
+        $(id).addEventListener("input", () => {
+          shipping.update(cart.getSnapshot(), address());
+          updateTaxed();
+        });
+
+      taxed.subscribe(() => {
+        const d = deliveryChoice();
+        const v = taxed.view();
+        // On a 429 the last figures are held (v.held) until it asks again.
+        const q = v.quote ?? v.held;
+        const m = (c) => formatMoney(c, q?.currency);
+        if (!d.ready) {
+          $("totals").innerHTML = "";
+          $("totalNote").textContent = d.delivered
+            ? "Enter the delivery address to see the total."
+            : "Choose how the order gets to you to see the total.";
+          return;
+        }
+        if (!q) {
+          $("totals").innerHTML = "";
+          $("totalNote").textContent =
+            v.failure?.kind === "tax"
+              ? "Tax will be added at payment."
+              : (v.error ?? "Working out the total…");
+          return;
+        }
+        $("totals").innerHTML = `
+          <div><dt>Subtotal</dt><dd>${m(q.subtotalCents)}</dd></div>
+          ${q.shipping ? `<div><dt>${esc(q.shipping.name || "Delivery")}</dt><dd>${q.shipping.chargeCents ? m(q.shipping.chargeCents) : "Free"}</dd></div>` : ""}
+          <div><dt>Tax</dt><dd>${q.complete ? m(q.taxCents) : "Added at payment"}</dd></div>
+          <div><dt><strong>${q.complete ? "Total" : "Total before tax"}</strong></dt><dd><strong>${m(q.totalCents)}</strong></dd></div>
+          <div><dt>Due today</dt><dd>${m(q.dueNowCents)}</dd></div>`;
+        $("totalNote").textContent = v.held
+          ? "Busy just now. Updating the total in a few seconds…"
+          : (q.taxNote ?? "");
+      });
+      goods.subscribe(renderCart);
+      cart.subscribe(refresh);
+      refresh();
+
+      $("checkout").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const name = $("name").value.trim(),
+          email = $("email").value.trim();
+        const d = deliveryChoice();
+        if (!name || !EMAIL_SHAPE.test(email))
+          return show($("coErr"), "Enter your name and email.");
+        if (!d.ready)
+          return show(
+            $("coErr"),
+            d.delivered
+              ? "Enter the delivery address, then wait for the total."
+              : "Choose how the order gets to you."
+          );
+        show($("coErr"), "");
+        $("coBtn").disabled = true;
+        try {
+          // Lines are {listingId, priceId, quantity, size?, fields?}: never amounts.
+          const order = await client.checkout(
+            checkoutRequest(cart.getSnapshot(), { name, email }, d.shipping)
+          );
+          cart.clear();
+          redirectToCheckout(order.checkoutUrl);
+        } catch (err) {
+          const f = classifyError(err, {
+            lineNames: cart.getSnapshot().lines.map((l) => l.name),
+          });
+          show($("coErr"), f.message);
+          if (f.kind === "invalid" && f.refetchShipping) {
+            methodId = undefined;
+            shipping.refetch();
+          }
+        } finally {
+          $("coBtn").disabled = false;
+        }
+      });
+    </script>
+  </body>
+</html>
