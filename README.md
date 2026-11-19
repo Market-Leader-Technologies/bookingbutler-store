@@ -326,28 +326,49 @@ first detail names. No answer at all (offline, CORS) is `status: 0`. A
 request cancelled by a newer one rejects with an `AbortError`
 (`isAbortError(e)`).
 
-`classifyError(err, { lineNames })` turns one into what to do:
+`classifyError(err, { lineNames })` turns one into what to do. A refusal
+with a `code` is classified by its code alone; an older server's refusal
+without one is still told by its sentence.
 
-| `kind`             | When                                                        | What to do                                                                                                    |
-| ------------------ | ----------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
-| `invalid`          | 400 naming a field or line                                  | show `message` by `field` / `lineIndex`; `lineSizes[i]` on a size input, `lineFields[i][key]` on a form field |
-| …`refetchShipping` | 400 `DELIVERY_METHOD_UNAVAILABLE` / `STORE_HAS_NO_DELIVERY` | ask for the shipping options again and let the shopper choose                                                 |
-| …`needsShipping`   | 400 `DELIVERY_METHOD_REQUIRED`                              | `includeTax` was sent with no method at a store that delivers: quote without it until a method is chosen      |
-| `closed`           | 400 `STORE_CLOSED`                                          | the store has closed; stop the checkout                                                                       |
-| `notTaking`        | 400 "this store is not taking orders online"                | the shop can't take payment: no checkout. A quote without `includeTax` still prices the cart                  |
-| `nothingToPay`     | 400 "there is nothing to pay for in this order"             | a taxed quote or checkout of a cart that comes to nothing; no checkout                                        |
-| `tax`              | 503                                                         | show subtotal and shipping, "Tax will be added at payment"; checkout may continue                             |
-| `rateLimited`      | 429 (any route)                                             | "Too many requests just now. Try again in a moment." See [Rate limits](#rate-limits)                          |
-| `missing`          | 404                                                         | the store or a listing is gone                                                                                |
-| `network`          | no answer                                                   | offline or blocked                                                                                            |
+| `kind`             | When                                                                 | What to do                                                                                                    |
+| ------------------ | -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `invalid`          | 400 naming a field or line (`FIELD_VALIDATION_ERROR`)                | show `message` by `field` / `lineIndex`; `lineSizes[i]` on a size input, `lineFields[i][key]` on a form field |
+| …`needsAddress`    | 400 `ADDRESS_REQUIRED` (keyed `shippingAddress`, `field: "address"`) | the chosen method delivers and no address came with it: **keep the shopper's choice** and ask for the address |
+| …`refetchShipping` | 400 `DELIVERY_METHOD_UNAVAILABLE` / `STORE_HAS_NO_DELIVERY`          | the method no longer reaches this cart or address: drop the choice, ask for the options again                 |
+| …`needsShipping`   | 400 `DELIVERY_METHOD_REQUIRED`                                       | `includeTax` was sent with no method at a store that delivers: quote without it until a method is chosen      |
+| `closed`           | 400 `STORE_CLOSED`                                                   | the store has closed; stop the checkout                                                                       |
+| `notTaking`        | 400 `STORE_NOT_TAKING_ORDERS` (checkout, a taxed quote, an upload)   | the shop can't take payment: no checkout. A quote without `includeTax` still prices the cart                  |
+| `nothingToPay`     | 400 `NOTHING_TO_PAY` (checkout, a taxed quote)                       | a cart that comes to nothing; no checkout                                                                     |
+| `tax`              | 503                                                                  | show subtotal and shipping, "Tax will be added at payment"; checkout may continue                             |
+| `rateLimited`      | 429 (any route)                                                      | "Too many requests just now. Try again in a moment." See [Rate limits](#rate-limits)                          |
+| `missing`          | 404                                                                  | the store or a listing is gone                                                                                |
+| `network`          | no answer                                                            | offline or blocked                                                                                            |
 
-The codes a 400 can carry (`err.code`): `STORE_CLOSED`,
-`DELIVERY_METHOD_REQUIRED`, `DELIVERY_METHOD_UNAVAILABLE`,
-`STORE_HAS_NO_DELIVERY`, `FIELD_VALIDATION_ERROR` (with `details` keyed
-`lines[i].size`, `lines[i].fields.<key>`, `email`, `shippingAddress`…). A
-receipt's 409 carries `ORDER_NOT_PLACED`. Some refusals have no code and are
-told by their sentence ("not taking orders online", "nothing to pay for");
-`classifyError` reads both.
+Every code is exported as a constant, and all of them as `STORE_ERROR_CODES`:
+
+| Code                          | Status | Where                                   | `classifyError` / `classifyReceiptError` |
+| ----------------------------- | ------ | --------------------------------------- | ---------------------------------------- |
+| `STORE_CLOSED`                | 400    | quote, shipping options, checkout       | `closed`                                 |
+| `STORE_NOT_TAKING_ORDERS`     | 400    | checkout, taxed quote, upload           | `notTaking`                              |
+| `NOTHING_TO_PAY`              | 400    | checkout, taxed quote                   | `nothingToPay`                           |
+| `DELIVERY_METHOD_REQUIRED`    | 400    | checkout, taxed quote                   | `invalid`, `needsShipping`               |
+| `DELIVERY_METHOD_UNAVAILABLE` | 400    | checkout, quote with a method           | `invalid`, `refetchShipping`             |
+| `ADDRESS_REQUIRED`            | 400    | checkout, quote with a delivered method | `invalid`, `needsAddress`                |
+| `STORE_HAS_NO_DELIVERY`       | 400    | checkout, quote with a method           | `invalid`, `refetchShipping`             |
+| `ORDER_NOT_PLACED`            | 409    | receipt                                 | `notPlaced`                              |
+
+`FIELD_VALIDATION_ERROR` comes with `details` keyed `lines[i].size`,
+`lines[i].fields.<key>`, `email`, `shippingAddress`… The bodies are typed
+from the spec: a 400 is `ValidationErrorBody` (`{error, code?, details?}`), a
+429 `RateLimitedBody` (`{error, message}`), the receipt's 409
+`ReceiptConflictBody`; 404 and 500 are `{error}`.
+
+**An address the shopper is still typing is never sent.** `useCheckout` and
+`<Checkout>` ask for a delivery's taxed quote only once the address has a
+street, a city and a state or postal code, and once the shipping options
+have answered for it as typed now. The server would refuse a missing address
+(`ADDRESS_REQUIRED`) or a partial one (`FIELD_VALIDATION_ERROR`), but each
+refused taxed quote still counts against that quote's own rate limit.
 
 The hooks and components already do all of this: refusals land on the line or
 field they name, a half-typed size (`"4."`) stays as typed, an answer for an
@@ -355,6 +376,13 @@ older cart is never shown beside a changed one, and after a failed quote no
 figures are shown until one succeeds.
 
 ## Receipts
+
+The SDK downloads receipts; it doesn't send them. **To email receipts to
+shoppers**, the organization builds a workflow in BookingButler: trigger
+_Order placed_ (or _Order paid_), the action **Create order receipt** (which
+files the PDF in the organization's library under the order's contact), then
+_Send email_ with that step's file attached. Run again for the same order,
+the action replaces the earlier file, so one current receipt is kept.
 
 `GET /public/orders/{token}/receipt` answers the order's receipt as a PDF,
 made as the order stands now (payments and refunds since included), in the
@@ -463,17 +491,24 @@ quoteRequest(cart, checkout?)  checkoutRequest(cart, contact, shipping?)  checko
 lineFromListing({ listing, option, price, quantity, size, answers })
 StoreApiError  classifyError  isAbortError  uploadErrorMessage  createUploader  RATE_LIMITED_MESSAGE
 receiptAvailable(order)  receiptFileName(contentDisposition, orderNumber?)  saveReceipt({ blob, filename })
-classifyReceiptError  ORDER_NOT_PLACED
+classifyReceiptError
+STORE_CLOSED  STORE_NOT_TAKING_ORDERS  NOTHING_TO_PAY  DELIVERY_METHOD_REQUIRED
+DELIVERY_METHOD_UNAVAILABLE  ADDRESS_REQUIRED  STORE_HAS_NO_DELIVERY  ORDER_NOT_PLACED
+STORE_ERROR_CODES  // all of them; type StoreErrorCode
 formatMoney  priceText  formatRate  formatTier  formatSize  formatLinePricing
 cardPriceText  paymentTermsText  quotedTermsText  shippingChargeText
 SizeDraft helpers: emptySizeDraft  sizeFromDraft  checkSizeDraft  sizeDraftFrom
 redirectToCheckout(url)
-// and every API type: Store, Listing, Price, Quote, QuoteLine, Order, Receipt, …
+// and every API type: Store, Listing, Price, Quote, QuoteLine, Order, OrderLine
+// (a shopper's line: no cost fields), ValidationErrorBody, RateLimitedBody,
+// ReceiptConflictBody, StoreErrorBody, …
 ```
 
 Types come from the backend's `swagger.json`, filtered to the public store
-routes: `pnpm generate:types [path/to/swagger.json]` rewrites
-`src/core/generated/openapi.ts` (the path, or `$BB_SWAGGER`, is required).
+routes: `pnpm generate:types <path/to/swagger.json>` rewrites
+`src/core/generated/openapi.ts` (the path, or `$BB_SWAGGER`, is required). It
+fails if the spec lacks the error bodies or the public order line the SDK
+types against.
 This is a maintainers' step: the spec comes from the BookingButler backend.
 Commit the result; a contract change then shows up as a type error.
 
@@ -494,14 +529,13 @@ Not automated. To publish a version:
 1. Make sure you are on a clean, reviewed commit and logged in to npm as a
    member of the `@bookingbutler` org (`npm whoami`; `npm org ls bookingbutler`).
    The scope must exist on npm before the first publish.
-2. Choose the license (`license` in `package.json` is `UNLICENSED` for now).
-3. Bump the version: `npm version patch|minor|major` (commits and tags).
-4. Check what will ship: `pnpm build && npm pack --dry-run`.
-5. Publish: `npm publish` (`publishConfig.access` is `public`;
+2. Bump the version: `npm version patch|minor|major` (commits and tags).
+3. Check what will ship: `pnpm build && npm pack --dry-run`.
+4. Publish: `npm publish` (`publishConfig.access` is `public`;
    `prepublishOnly` runs typecheck, tests and build first). Add
    `--provenance` when publishing from CI.
-6. Push the commit and tag: `git push --follow-tags`.
-7. Update the CDN version in any vanilla pages that pin it.
+5. Push the commit and tag: `git push --follow-tags`.
+6. Update the CDN version in any vanilla pages that pin it.
 
 ## License
 

@@ -50,7 +50,16 @@ const taxedAnswer: QuoteHandler = (b) => ({
   }),
 });
 
-function mount(taxed: QuoteHandler = taxedAnswer) {
+type CheckoutHandler = (body: unknown) => { status?: number; body?: unknown };
+const placed: CheckoutHandler = () => ({
+  status: 201,
+  body: { token: "tok", checkoutUrl: "https://pay.test/o/tok" },
+});
+
+function mount(
+  taxed: QuoteHandler = taxedAnswer,
+  checkout: CheckoutHandler = placed
+) {
   const cart = createCart({ storeId: STORE, storage: null });
   cart.add(line({ quantity: 2 }));
   let n = 0;
@@ -60,10 +69,7 @@ function mount(taxed: QuoteHandler = taxedAnswer) {
       const b = body as QuoteRequest;
       return b.includeTax ? taxed(b, n++) : taxedAnswer(b, 0);
     },
-    "POST /public/stores/{id}/checkout": () => ({
-      status: 201,
-      body: { token: "tok", checkoutUrl: "https://pay.test/o/tok" },
-    }),
+    "POST /public/stores/{id}/checkout": ({ body }) => checkout(body),
   });
   const onCheckout = vi.fn();
   render(
@@ -241,4 +247,73 @@ describe("<Checkout> taxed quotes", () => {
       ).disabled
     ).toBe(true);
   });
+
+  const addressRequired = {
+    status: 400,
+    body: {
+      error:
+        "validation failed for field 'shippingAddress': this delivery method needs the address the order goes to",
+      code: "ADDRESS_REQUIRED",
+      details: {
+        shippingAddress:
+          "this delivery method needs the address the order goes to",
+      },
+    },
+  };
+  const van = () => screen.getByLabelText(/Local delivery/) as HTMLInputElement;
+
+  it("ADDRESS_REQUIRED on the taxed quote keeps the delivery choice and asks for the address", async () => {
+    const { taxedQuotes, shippingCalls } = mount(() => addressRequired);
+    fireEvent.click(await screen.findByLabelText(/Local delivery/));
+    type("Street", "1 Main St");
+    type("City", "Denver");
+    type("Postal code", "80202");
+    await waitFor(() => expect(taxedQuotes()).toHaveLength(1), {
+      timeout: 3000,
+    });
+    expect(
+      await screen.findByText(
+        "Delivery address: this delivery method needs the address the order goes to"
+      )
+    ).toBeTruthy();
+    expect(van().checked).toBe(true);
+    expect(totals().textContent).toBe(
+      "Enter the delivery address to see the total."
+    );
+    // Not treated as a stale method: the options are not asked for again.
+    const asked = shippingCalls().length;
+    await sleep(800);
+    expect(shippingCalls()).toHaveLength(asked);
+    expect(van().checked).toBe(true);
+  }, 10_000);
+
+  it("ADDRESS_REQUIRED on the checkout keeps the delivery choice and asks for the address", async () => {
+    const { calls, onCheckout } = mount(taxedAnswer, () => addressRequired);
+    fireEvent.click(await screen.findByLabelText(/Local delivery/));
+    type("Street", "1 Main St");
+    type("City", "Denver");
+    type("Postal code", "80202");
+    type("Name", "Ada Lovelace");
+    type(/^Email/, "ada@example.com");
+    await waitFor(() => expect(totals().textContent).toContain("$47.40"), {
+      timeout: 3000,
+    });
+    fireEvent.click(
+      screen.getByRole("button", { name: "Continue to payment" })
+    );
+    expect(
+      await screen.findByText(
+        "Delivery address: this delivery method needs the address the order goes to"
+      )
+    ).toBeTruthy();
+    expect(onCheckout).not.toHaveBeenCalled();
+    expect(van().checked).toBe(true);
+    expect(
+      (
+        calls.find((c) => c.path.endsWith("/checkout"))!.body as {
+          shippingMethodId?: string;
+        }
+      ).shippingMethodId
+    ).toBe("van");
+  }, 10_000);
 });

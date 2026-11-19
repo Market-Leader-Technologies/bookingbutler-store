@@ -1,4 +1,4 @@
-import { HTTP, isStoreApiError } from "./errors";
+import { HTTP, isStoreApiError, ORDER_NOT_PLACED } from "./errors";
 import type { Order } from "./types";
 
 /*
@@ -6,9 +6,6 @@ import type { Order } from "./types";
  * the order stands now. These helpers name the file, save it in a browser,
  * and say what a refusal means.
  */
-
-/** The code of the 409 for a checkout that was never completed. */
-export const ORDER_NOT_PLACED = "ORDER_NOT_PLACED";
 
 /**
  * The order has a receipt: it was placed (`paymentStatus` is anything but

@@ -1,4 +1,10 @@
-import type { ValidationErrorCode } from "./types";
+import type {
+  RateLimitedBody,
+  ReceiptConflictBody,
+  StoreErrorBody,
+  ValidationErrorBody,
+  ValidationErrorCode,
+} from "./types";
 
 /** HTTP statuses the store API answers with, by name. */
 export const HTTP = {
@@ -9,6 +15,43 @@ export const HTTP = {
   TOO_MANY_REQUESTS: 429,
   SERVICE_UNAVAILABLE: 503,
 } as const;
+
+// ─── Codes ───────────────────────────────────────────────────────────────────
+
+/** 400: a temporary store past its closing time. */
+export const STORE_CLOSED = "STORE_CLOSED" satisfies ValidationErrorCode;
+/** 400: the shop can't take payment (checkout, a taxed quote, an upload). */
+export const STORE_NOT_TAKING_ORDERS =
+  "STORE_NOT_TAKING_ORDERS" satisfies ValidationErrorCode;
+/** 400: a taxed quote or checkout of a cart that comes to nothing. */
+export const NOTHING_TO_PAY = "NOTHING_TO_PAY" satisfies ValidationErrorCode;
+/** 400: `includeTax` (or checkout) with no delivery choice at a store that delivers. */
+export const DELIVERY_METHOD_REQUIRED =
+  "DELIVERY_METHOD_REQUIRED" satisfies ValidationErrorCode;
+/** 400: the chosen method no longer reaches this cart or address. */
+export const DELIVERY_METHOD_UNAVAILABLE =
+  "DELIVERY_METHOD_UNAVAILABLE" satisfies ValidationErrorCode;
+/** 400 keyed `shippingAddress`: the chosen method delivers and needs the address. */
+export const ADDRESS_REQUIRED =
+  "ADDRESS_REQUIRED" satisfies ValidationErrorCode;
+/** 400: a delivery method was sent to a store that has none. */
+export const STORE_HAS_NO_DELIVERY =
+  "STORE_HAS_NO_DELIVERY" satisfies ValidationErrorCode;
+/** 409 on the receipt: the checkout was never completed. */
+export const ORDER_NOT_PLACED = "ORDER_NOT_PLACED";
+
+/** Every code a store client can switch on. */
+export const STORE_ERROR_CODES = [
+  STORE_CLOSED,
+  STORE_NOT_TAKING_ORDERS,
+  NOTHING_TO_PAY,
+  DELIVERY_METHOD_REQUIRED,
+  DELIVERY_METHOD_UNAVAILABLE,
+  ADDRESS_REQUIRED,
+  STORE_HAS_NO_DELIVERY,
+  ORDER_NOT_PLACED,
+] as const;
+export type StoreErrorCode = (typeof STORE_ERROR_CODES)[number];
 
 /** The checkout form's fields a refusal can name. */
 export type CheckoutField =
@@ -72,7 +115,8 @@ export class StoreApiError extends Error {
   /** HTTP status; 0 when the request never got an answer. */
   readonly status: number;
   /** The server's machine-readable code, e.g. `STORE_CLOSED`. */
-  readonly code?: ValidationErrorCode | (string & {});
+  readonly code?:
+    ValidationErrorCode | ReceiptConflictBody["code"] | (string & {});
   /** `details`: request key → what is wrong with it. */
   readonly details: Record<string, string>;
   /** The request key the refusal names first (`lines[0].size`, `email`). */
@@ -83,8 +127,12 @@ export class StoreApiError extends Error {
   readonly lineIndex?: number;
   /** The answer it names (`lines[i].fields.<fieldKey>`). */
   readonly fieldKey?: string;
-  /** The parsed JSON body, or the text when it wasn't JSON. */
-  readonly body: unknown;
+  /**
+   * The parsed JSON body (a 400 is `ValidationErrorBody`, a 429
+   * `RateLimitedBody`, the receipt's 409 `ReceiptConflictBody`; 404 and 500
+   * are `{error}`), or the text when it wasn't JSON.
+   */
+  readonly body: StoreErrorBody | string | undefined;
   /** The server's own sentence (`error`/`message`), before any rewording. */
   readonly serverMessage: string;
   readonly method?: string;
@@ -99,7 +147,10 @@ export class StoreApiError extends Error {
     cause?: unknown;
   }) {
     const body = init.body;
-    const record =
+    // What the server declared, read loosely: a field of the wrong type is ignored.
+    const record: {
+      [K in keyof (ValidationErrorBody & RateLimitedBody)]?: unknown;
+    } =
       body && typeof body === "object" && !Array.isArray(body)
         ? (body as Record<string, unknown>)
         : {};
@@ -129,7 +180,10 @@ export class StoreApiError extends Error {
       init.cause !== undefined ? { cause: init.cause } : undefined
     );
     this.status = init.status;
-    this.body = body;
+    this.body =
+      body === undefined || typeof body === "string"
+        ? body
+        : (body as StoreErrorBody);
     this.serverMessage = serverMessage;
     this.method = init.method;
     this.url = init.url;
@@ -187,6 +241,12 @@ export type StoreFailure =
        */
       refetchShipping?: boolean;
       /**
+       * `ADDRESS_REQUIRED` (keyed `shippingAddress`): the chosen method
+       * delivers and no address came with it. Keep the shopper's choice and
+       * ask for the address.
+       */
+      needsAddress?: boolean;
+      /**
        * `DELIVERY_METHOD_REQUIRED`: a taxed quote (or checkout) without a
        * delivery choice at a store that delivers. Ask for tax only once a
        * method is chosen; quote without `includeTax` before then.
@@ -195,12 +255,12 @@ export type StoreFailure =
       code?: string;
     }
   /**
-   * 400 "not taking orders online": the shop can't take payment. A taxed
+   * 400 `STORE_NOT_TAKING_ORDERS`: the shop can't take payment. A taxed
    * quote and the checkout are refused; a quote without `includeTax` still
    * prices the cart, so the cart can show it.
    */
   | { kind: "notTaking"; message: string }
-  /** 400 "nothing to pay for": a taxed quote or checkout of a cart that comes to nothing. */
+  /** 400 `NOTHING_TO_PAY`: a taxed quote or checkout of a cart that comes to nothing. */
   | { kind: "nothingToPay"; message: string }
   /** 400 `STORE_CLOSED`: a temporary store past its closing time. */
   | { kind: "closed"; message: string }
@@ -226,17 +286,20 @@ const FIELD_LABELS: Record<Exclude<CheckoutField, "lines">, string> = {
   address: "Delivery address",
 };
 
-const STALE_SHIPPING_CODES = new Set([
-  "DELIVERY_METHOD_UNAVAILABLE",
-  "STORE_HAS_NO_DELIVERY",
+const STALE_SHIPPING_CODES = new Set<string>([
+  DELIVERY_METHOD_UNAVAILABLE,
+  STORE_HAS_NO_DELIVERY,
 ]);
-const SHIPPING_FIELD_CODES = new Set([
-  "DELIVERY_METHOD_REQUIRED",
-  "DELIVERY_METHOD_UNAVAILABLE",
-  "STORE_HAS_NO_DELIVERY",
+const SHIPPING_FIELD_CODES = new Set<string>([
+  DELIVERY_METHOD_REQUIRED,
+  DELIVERY_METHOD_UNAVAILABLE,
+  STORE_HAS_NO_DELIVERY,
 ]);
+/**
+ * The same refusals by their sentence, for an older server's answer without
+ * a `code`. A coded answer is classified by its code alone.
+ */
 const ADDRESS_INCOMPLETE = /delivery address needs/i;
-/** The same refusals by their sentence, for an answer without a `code`. */
 const SHIPPING_GONE_TEXT =
   /ask for the options again|not available for this order|this store has no delivery methods|this store does not deliver/i;
 const NO_SHIPPING_CHOICE_TEXT = /choose how the order gets to you/i;
@@ -313,17 +376,20 @@ export function classifyError(
   if (status === HTTP.BAD_REQUEST && isStoreApiError(error)) {
     const message = error.serverMessage;
     const code = error.code;
-    if (code === "STORE_CLOSED")
+    // By the code; by the sentence only for an older server that sent none.
+    const is = (c: string, text?: RegExp) =>
+      code != null ? code === c : text != null && text.test(message);
+    if (is(STORE_CLOSED))
       return {
         kind: "closed",
         message: "This store has closed and isn't taking orders any more.",
       };
-    if (NOT_TAKING_TEXT.test(message))
+    if (is(STORE_NOT_TAKING_ORDERS, NOT_TAKING_TEXT))
       return {
         kind: "notTaking",
         message: "This store isn't taking orders online right now.",
       };
-    if (NOTHING_TO_PAY_TEXT.test(message))
+    if (is(NOTHING_TO_PAY, NOTHING_TO_PAY_TEXT))
       return {
         kind: "nothingToPay",
         message:
@@ -340,27 +406,27 @@ export function classifyError(
       code != null
         ? STALE_SHIPPING_CODES.has(code)
         : SHIPPING_GONE_TEXT.test(message);
+    const needsAddress = is(ADDRESS_REQUIRED);
     const field =
       parsed.field ??
-      ((
-        code != null
-          ? SHIPPING_FIELD_CODES.has(code)
-          : SHIPPING_GONE_TEXT.test(message) ||
-            NO_SHIPPING_CHOICE_TEXT.test(message)
-      )
-        ? "shipping"
-        : ADDRESS_INCOMPLETE.test(message)
-          ? "address"
-          : undefined);
+      (needsAddress
+        ? "address"
+        : (
+              code != null
+                ? SHIPPING_FIELD_CODES.has(code)
+                : SHIPPING_GONE_TEXT.test(message) ||
+                  NO_SHIPPING_CHOICE_TEXT.test(message)
+            )
+          ? "shipping"
+          : ADDRESS_INCOMPLETE.test(message)
+            ? "address"
+            : undefined);
     const named = key
       ? details
       : requestKey && text
         ? { [requestKey]: text }
         : {};
-    const needsShipping =
-      code != null
-        ? code === "DELIVERY_METHOD_REQUIRED"
-        : NO_SHIPPING_CHOICE_TEXT.test(message);
+    const needsShipping = is(DELIVERY_METHOD_REQUIRED, NO_SHIPPING_CHOICE_TEXT);
     const lineFields = lineFieldErrors(named);
     const lineSizes = lineSizeErrors(named);
     const where =
@@ -378,6 +444,7 @@ export function classifyError(
       ...(lineSizes ? { lineSizes } : {}),
       ...(shippingGone ? { refetchShipping: true } : {}),
       ...(needsShipping ? { needsShipping: true } : {}),
+      ...(needsAddress ? { needsAddress: true } : {}),
       ...(code ? { code } : {}),
       message: where
         ? `${where}: ${text || "check this and try again."}`

@@ -492,11 +492,12 @@ function CheckoutTotals({
   const refused = taxed.failure;
   if (refused?.kind === "closed") return null;
   const methodGone = refused?.kind === "invalid" && refused.refetchShipping;
+  const addressNeeded = refused?.kind === "invalid" && refused.needsAddress;
   let body: ReactNode;
   let state = "pending";
   if (c.sizesMissing)
     body = <p className="bb-hint">Enter every size to see the total.</p>;
-  else if (!c.deliveryReady || methodGone)
+  else if (!c.deliveryReady || methodGone || addressNeeded)
     body = (
       <p className="bb-hint">
         {c.delivered

@@ -38,8 +38,18 @@ export type OrderShipping = S["handlers.OrderShippingResponse"];
 export type Address = S["models.TaxAddress"];
 export type Upload = S["handlers.PublicCheckoutUploadResponse"];
 export type Order = S["handlers.PublicOrderResponse"];
-export type OrderLine = S["handlers.OrderLineItemResponse"];
+/** A line of a shopper's order: the staff line without its cost. */
+export type OrderLine = S["handlers.PublicOrderLineItemResponse"];
+
+/** A 400 from any public route: `{error, code?, details?}`. */
 export type ValidationErrorBody = S["handlers.ValidationErrorResponse"];
+/** A 429 from any public route: `{error: "rate limit exceeded", message}`. */
+export type RateLimitedBody = S["handlers.PublicRateLimitedResponse"];
+/** The receipt's 409: `{error, code: "ORDER_NOT_PLACED"}`. */
+export type ReceiptConflictBody = S["handlers.OrderReceiptConflictResponse"];
+/** Any JSON error body the public routes declare (404 and 500 are `{error}`). */
+export type StoreErrorBody =
+  ValidationErrorBody | RateLimitedBody | ReceiptConflictBody;
 
 export type CurrencyCode = S["models.CurrencyCode"];
 export type PaymentTiming = S["models.PaymentTiming"];

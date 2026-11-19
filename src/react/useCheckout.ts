@@ -133,7 +133,11 @@ export function useCheckout({
     configured && chosen?.methodId
       ? { methodId: chosen.methodId, ...(delivered ? { address } : {}) }
       : undefined;
-  // A store with no methods is a pickup: chosen already.
+  // A store with no methods is a pickup: chosen already. A delivery also
+  // waits for a complete address. The server says ADDRESS_REQUIRED for a
+  // missing one and FIELD_VALIDATION_ERROR for a partial one, but each such
+  // refusal of a taxed quote spends the taxed quote's own rate limit (20 in
+  // a burst, then 1 every 5 s), so a half-typed address is never sent.
   const deliveryReady =
     shipping.configured === false ||
     (deliveryChoice != null && !(delivered && incomplete));
@@ -162,8 +166,12 @@ export function useCheckout({
       setFailure(refused);
       setMethodId(undefined);
       refetchShipping();
-    } else if (refused?.kind === "invalid" && refused.needsShipping) {
-      // DELIVERY_METHOD_REQUIRED: say so on the choice.
+    } else if (
+      refused?.kind === "invalid" &&
+      (refused.needsShipping || refused.needsAddress)
+    ) {
+      // DELIVERY_METHOD_REQUIRED: say so on the choice. ADDRESS_REQUIRED:
+      // keep the choice and ask for the address, on the address.
       setFailure(refused);
     }
   }, [taxed.failure, refetchShipping, setFailure]);
@@ -284,6 +292,7 @@ export function useCheckout({
         lineNames: lines.map(cartLineName),
       });
       setFailure(refused);
+      // ADDRESS_REQUIRED keeps the delivery choice: only the address is missing.
       if (refused.kind === "invalid" && refused.refetchShipping) {
         setMethodId(undefined);
         refetchShipping();
